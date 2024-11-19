@@ -20,7 +20,7 @@ type DoQListener struct {
 	addr    string
 	r       Resolver
 	opt     DoQListenerOptions
-	ln      *quic.Listener
+	ln      *quic.EarlyListener
 	log     *logrus.Entry
 	metrics *DoQListenerMetrics
 }
@@ -76,7 +76,10 @@ func NewQUICListener(id, addr string, opt DoQListenerOptions, resolver Resolver)
 // Start the QUIC server.
 func (s DoQListener) Start() error {
 	var err error
-	s.ln, err = quic.ListenAddr(s.addr, s.opt.TLSConfig, &quic.Config{})
+	s.ln, err = quic.ListenAddrEarly(s.addr, s.opt.TLSConfig, &quic.Config{
+		Allow0RTT:      true,
+		MaxIdleTimeout: 5 * time.Minute,
+	})
 	if err != nil {
 		return err
 	}
@@ -89,12 +92,7 @@ func (s DoQListener) Start() error {
 			continue
 		}
 		s.log.Trace("started connection")
-
-		go func() {
-			s.handleConnection(connection)
-			_ = connection.CloseWithError(DOQNoError, "")
-			s.log.Trace("closing connection")
-		}()
+		go func() { s.handleConnection(connection) }()
 	}
 }
 
@@ -128,24 +126,23 @@ func (s DoQListener) handleConnection(connection quic.Connection) {
 	s.metrics.connection.Add(1)
 
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // TODO: configurable
+		ctx := context.Background() // TODO: configurable
 		stream, err := connection.AcceptStream(ctx)
 		if err != nil {
-			cancel()
+			CloseConn(connection, log)
 			break
 		}
 		log.WithField("stream", stream.StreamID()).Trace("opening stream")
 		go func() {
-			s.handleStream(stream, log, ci)
-			cancel()
+			s.handleStream(stream, log, ci, connection)
 			log.WithField("stream", stream.StreamID()).Trace("closing stream")
+			_ = stream.Close()
 		}()
 	}
 }
 
-func (s DoQListener) handleStream(stream quic.Stream, log *logrus.Entry, ci ClientInfo) {
+func (s DoQListener) handleStream(stream quic.Stream, log *logrus.Entry, ci ClientInfo, connection quic.Connection) {
 	// DNS over QUIC uses one stream per query/response.
-	defer stream.Close()
 	s.metrics.stream.Add(1)
 
 	// DoQ requires a length prefix, like TCP
@@ -153,6 +150,7 @@ func (s DoQListener) handleStream(stream quic.Stream, log *logrus.Entry, ci Clie
 	if err := binary.Read(stream, binary.BigEndian, &length); err != nil {
 		s.metrics.err.Add("read", 1)
 		log.WithError(err).Error("failed to read query")
+		CloseConn(connection, log)
 		return
 	}
 
@@ -162,6 +160,7 @@ func (s DoQListener) handleStream(stream quic.Stream, log *logrus.Entry, ci Clie
 	if _, err := io.ReadFull(stream, b); err != nil {
 		s.metrics.err.Add("read", 1)
 		log.WithError(err).Error("failed to read query")
+		CloseConn(connection, log)
 		return
 	}
 
@@ -170,6 +169,7 @@ func (s DoQListener) handleStream(stream quic.Stream, log *logrus.Entry, ci Clie
 	if err := q.Unpack(b); err != nil {
 		s.metrics.err.Add("unpack", 1)
 		log.WithError(err).Error("failed to decode query")
+		CloseConn(connection, log)
 		return
 	}
 	log = log.WithField("qname", qName(q))
@@ -183,6 +183,7 @@ func (s DoQListener) handleStream(stream quic.Stream, log *logrus.Entry, ci Clie
 			if opt.Option() == dns.EDNS0TCPKEEPALIVE {
 				log.Error("received edns-tcp-keepalive, aborting")
 				s.metrics.err.Add("keepalive", 1)
+				CloseConn(connection, log)
 				return
 			}
 		}
@@ -215,6 +216,11 @@ func (s DoQListener) handleStream(stream quic.Stream, log *logrus.Entry, ci Clie
 		log.WithError(err).Error("failed to send response")
 	}
 	s.metrics.response.Add(rCode(a), 1)
+}
+
+func CloseConn(connection quic.Connection, log *logrus.Entry) {
+	_ = connection.CloseWithError(DOQNoError, "")
+	log.Trace("closing connection")
 }
 
 func (s DoQListener) String() string {
