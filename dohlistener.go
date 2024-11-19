@@ -133,7 +133,10 @@ func (s *DoHListener) startQUIC() error {
 	s.quicServer = &http3.Server{
 		Addr:       s.addr,
 		TLSConfig:  s.opt.TLSConfig,
-		QUICConfig: &quic.Config{},
+		QUICConfig: &quic.Config{
+			Allow0RTT:      true,
+			MaxIdleTimeout: 5 * time.Minute,
+		},
 	}
 	return s.quicServer.ListenAndServe()
 }
