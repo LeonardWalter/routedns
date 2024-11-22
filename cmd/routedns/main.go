@@ -292,6 +292,7 @@ func start(opt options, args []string) error {
 				TLSConfig:     tlsConfig,
 				KeySeed:       l.KeySeed,
 				OdohMode:      l.OdohMode,
+				AllowDoH:      l.AllowDoH,
 				ListenOptions: opt,
 			}
 			ln, err := rdns.NewODoHListener(id, l.Address, opt, resolver)

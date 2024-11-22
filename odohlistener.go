@@ -54,6 +54,7 @@ type ODoHListener struct {
 	addr        string
 	proxyClient *http.Client // Client for proxy forwarding if acting as ODoH proxy
 	listener    *http.Server
+	doh         *DoHListener
 
 	r           Resolver // Forwarding DNS queries if acting as ODoH Target
 	opt         ODoHListenerOptions
@@ -64,6 +65,7 @@ type ODoHListenerOptions struct {
 	ListenOptions
 
 	OdohMode  string
+	AllowDoH  bool
 	KeySeed   string
 	TLSConfig *tls.Config
 }
@@ -85,6 +87,7 @@ func NewODoHListener(id, addr string, opt ODoHListenerOptions, resolver Resolver
 		opt:         opt,
 		proxyClient: &http.Client{},
 		odohKeyPair: keyPair,
+		doh:         &DoHListener{},
 	}
 
 	switch opt.OdohMode {
@@ -99,6 +102,14 @@ func NewODoHListener(id, addr string, opt ODoHListenerOptions, resolver Resolver
 		http.HandleFunc("/.well-known/odohconfigs", l.configHandler)
 	}
 
+	if opt.AllowDoH {
+		l.doh = &DoHListener{
+			id:      id,
+			addr:    addr,
+			r:       resolver,
+			metrics: NewDoHListenerMetrics(id),
+		}
+	}
 	return l, nil
 }
 
@@ -178,6 +189,24 @@ func forwardProxyRequest(client *http.Client, targethost string, targetPath stri
 }
 
 func (s *ODoHListener) ODoHqueryHandler(w http.ResponseWriter, r *http.Request) {
+
+	qHeader := r.Header.Get("Content-Type")
+	if qHeader == "application/dns-message" {
+		if s.opt.AllowDoH {
+			Log.Debug("Forwarding DoH query")
+			s.doh.dohHandler(w, r)
+			return
+		} else {
+			Log.Debug("DoH queries disabled, dropping DoH message")
+			http.Error(w, "only contentType oblivious-dns-message allowed", http.StatusMethodNotAllowed)
+			return
+		}
+	}
+
+	if qHeader != "application/oblivious-dns-message" {
+		http.Error(w, "only contentType oblivious-dns-message allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if r.Method != "POST" {
 		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
 		return
