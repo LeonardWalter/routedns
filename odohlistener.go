@@ -24,14 +24,12 @@ package rdns
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"io"
 	"log"
-	"net"
 	"net/http"
 
 	"github.com/cisco/go-hpke"
@@ -54,7 +52,6 @@ type ODoHListener struct {
 	id          string
 	addr        string
 	proxyClient *http.Client // Client for proxy forwarding if acting as ODoH proxy
-	listener    *http.Server
 	doh         *DoHListener
 
 	r           Resolver // Forwarding DNS queries if acting as ODoH Target
@@ -81,6 +78,16 @@ func NewODoHListener(id, addr string, opt ODoHListenerOptions, resolver Resolver
 		return nil, err
 	}
 
+	dohOpt := DoHListenerOptions{
+		TLSConfig: opt.TLSConfig,
+		isChild:   true,
+	}
+	dohListen, err := NewDoHListener(id, addr, dohOpt, resolver)
+	if err != nil {
+		log.Fatalf("Failed to spawn DoH listener: %v", err)
+		return nil, err
+	}
+
 	l := &ODoHListener{
 		id:          id,
 		addr:        addr,
@@ -88,7 +95,7 @@ func NewODoHListener(id, addr string, opt ODoHListenerOptions, resolver Resolver
 		opt:         opt,
 		proxyClient: &http.Client{},
 		odohKeyPair: keyPair,
-		doh:         &DoHListener{},
+		doh:         dohListen,
 	}
 
 	switch opt.OdohMode {
@@ -102,40 +109,15 @@ func NewODoHListener(id, addr string, opt ODoHListenerOptions, resolver Resolver
 		http.HandleFunc("/dns-query", l.ODoHqueryHandler)
 		http.HandleFunc("/.well-known/odohconfigs", l.configHandler)
 	}
-
-	if opt.AllowDoH {
-		l.doh = &DoHListener{
-			id:      id,
-			addr:    addr,
-			r:       resolver,
-			metrics: NewDoHListenerMetrics(id),
-		}
-	}
 	return l, nil
 }
 
-// Start the ODoH server. Re-use DoH timeouts
 func (s *ODoHListener) Start() error {
-	Log.WithFields(logrus.Fields{"id": s.id, "protocol": "doh", "addr": s.addr}).Info("starting listener")
-
-	s.listener = &http.Server{
-		Addr:         s.addr,
-		TLSConfig:    s.opt.TLSConfig,
-		ReadTimeout:  dohServerTimeout,
-		WriteTimeout: dohServerTimeout,
-	}
-
-	ln, err := net.Listen("tcp", s.addr)
-	if err != nil {
-		return err
-	}
-	defer ln.Close()
-	return s.listener.ServeTLS(ln, "", "")
+	return s.doh.Start()
 }
 
 func (s *ODoHListener) Stop() error {
-	Log.WithFields(logrus.Fields{"id": s.id, "protocol": "doh", "addr": s.addr}).Info("stopping listener")
-	return s.listener.Shutdown(context.Background())
+	return s.doh.Stop()
 }
 
 func (s *ODoHListener) ODoHproxyHandler(w http.ResponseWriter, r *http.Request) {
