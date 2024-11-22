@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"expvar"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -30,8 +30,6 @@ type DoHListener struct {
 	addr string
 	r    Resolver
 	opt  DoHListenerOptions
-
-	handler http.Handler
 
 	metrics *DoHListenerMetrics
 }
@@ -93,7 +91,7 @@ func NewDoHListener(id, addr string, opt DoHListenerOptions, resolver Resolver) 
 		opt:     opt,
 		metrics: NewDoHListenerMetrics(id),
 	}
-	l.handler = http.HandlerFunc(l.dohHandler)
+	http.HandleFunc("/dns-query", l.dohHandler)
 	return l, nil
 }
 
@@ -111,7 +109,6 @@ func (s *DoHListener) startTCP() error {
 	s.httpServer = &http.Server{
 		Addr:         s.addr,
 		TLSConfig:    s.opt.TLSConfig,
-		Handler:      s.handler,
 		ReadTimeout:  dohServerTimeout,
 		WriteTimeout: dohServerTimeout,
 	}
@@ -130,9 +127,8 @@ func (s *DoHListener) startTCP() error {
 // Start the DoH server with QUIC transport.
 func (s *DoHListener) startQUIC() error {
 	s.quicServer = &http3.Server{
-		Addr:       s.addr,
-		TLSConfig:  s.opt.TLSConfig,
-		Handler:    s.handler,
+		Addr:      s.addr,
+		TLSConfig: s.opt.TLSConfig,
 		QUICConfig: &quic.Config{
 			Allow0RTT:      true,
 			MaxIdleTimeout: 5 * time.Minute,
@@ -187,7 +183,7 @@ func (s *DoHListener) getHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *DoHListener) postHandler(w http.ResponseWriter, r *http.Request) {
-	b, err := ioutil.ReadAll(r.Body)
+	b, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
