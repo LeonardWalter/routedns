@@ -30,6 +30,9 @@ type listener struct {
 	MutualTLS  bool     `toml:"mutual-tls"`
 	NoTLS      bool     `toml:"no-tls"` // Disable TLS in DoH servers
 	AllowedNet []string `toml:"allowed-net"`
+	KeySeed    string   `toml:"key-seed"`  // ODoH HPKE key seed, 16 byte hex key. Generate for example with: "openssl rand -hex 16"
+	OdohMode   string   `toml:"odoh-mode"` // switch between ODoH mode - accepts "proxy", "target" or does both if empty/other
+	AllowDoH   bool     `toml:"allow-doh"` // Allow ODoH listeners to also handle DoH queries to /dns-query
 	Frontend   dohFrontend
 }
 
@@ -59,7 +62,10 @@ type resolver struct {
 	Socks5ResolveLocal bool   `toml:"socks5-resolve-local"` // Resolve DNS server address locally (i.e. bootstrap-resolver), not on the SOCK5 proxy
 
 	//QUIC and DoH/3 configuration
-	Use0RTT       bool   `toml:"enable-0rtt"`
+	Use0RTT bool `toml:"enable-0rtt"`
+	// URL for Oblivious DNS target
+	Target       string `toml:"target"`
+	TargetConfig string `toml:"target-config"`
 }
 
 // DoH-specific resolver options

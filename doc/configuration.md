@@ -41,6 +41,7 @@
   - [Plain DNS](#plain-dns-resolver)
   - [DNS-over-TLS](#dns-over-tls-resolver)
   - [DNS-over-HTTPS](#dns-over-https-resolver)
+  - [Oblivious DNS (ODoH)](#oblivious-DNS-ODoH)
   - [DNS-over-DTLS](#dns-over-dtls-resolver)
   - [DNS-over-QUIC](#dns-over-quic-resolver)
   - [Bootstrap Resolver](#bootstrap-resolver)
@@ -266,6 +267,33 @@ server-key = "example-config/server.key"
 ```
 
 Example config files: [doq-listener.toml](../cmd/routedns/example-config/doq-listener.toml)
+
+### Oblivious DNS over HTTPS (ODoH)
+
+ODoH ([RFC9230](https://datatracker.ietf.org/doc/rfc9230/)) 
+
+Providing the key-seed is not necessary if the listener is running in proxy mode. If it is not set, the listener will generate a new random key on each launch. A key seed can be manually generated using for example openssl: `openssl rand -hex 16`
+
+By default the ODoH listener listens on `/proxy` and `/dns-query`. Additionally, it will host its HPKE config under `/.well-known/odohconfigs`. If `odoh-mode  = "proxy"` is set, it will only listen and handle ODoH proxy requests on `/proxy`. If set to target the listener will only handle the ODoH queries on `/dns-query`.
+
+```toml
+[listeners.local-odoh]
+address = ":443"
+protocol = "odoh"
+resolver = "cloudflare"
+
+# The key seed is used to generate the HPKE keypair. 
+key-seed = "414dd55667a0cdff72dfbbd8515a9e0a"
+# odoh-mode allows restricting to only "proxy" mode or "target" mode. Default or left empty enables both modes.
+odoh-mode  = "target"
+
+# If enabled, the listener will also respond to regular DoH queries using the same resolver. When not set or false, DoH queries are ignored.
+allow-doh = true
+
+# TLS information
+server-crt = "example-config/server.crt"
+server-key = "example-config/server.key"
+```
 
 ### Admin
 
@@ -1585,6 +1613,41 @@ enable-0rtt = true
 ```
 
 Example config files: [well-known.toml](../cmd/routedns/example-config/well-known.toml), [simple-doh.toml](../cmd/routedns/example-config/simple-doh.toml), [mutual-tls-doh-client.toml](../cmd/routedns/example-config/mutual-tls-doh-client.toml)
+
+### Oblivious DNS (ODoH)
+
+ODoH ([RFC9230](https://datatracker.ietf.org/doc/rfc9230/)) is intended to improve privacy of **clients** by encrypting queries for a **target** DNS server while sending the query through a **proxy**. In this configuration, neither the target nor the proxy can see the query content and the source IP of the client at the same time. A client query is resolved as follows:
+
+- If the clients target-config = "" parameter is not set, the client automatically queries the public key of the target resolver. This is a plain query that can be resolved by any resolver, but for privacy it's best to *not* use the target for this. RouteDNS first tries to use the proxy for this. The response is validated with DNSSEC. If this fails, it will alternatively request the key from the target directly. If the "target-config" is provided through the config file, these steps are omitted.
+- The client then encrypts the actual query with the public key of the target. A public key of the client is embedded in the encrypted message.
+- The encrypted query message is sent to the proxy, with information about which target it should be forwarded to.
+- The target then encrypts the response with the client key and responds to the proxy, which then forwards the response to the client.
+- The client decrypts the response it received from the proxy using its private key.
+
+The ODoH resolver has all the configuration options as [DoH](#DNS-over-HTTPS-Resolver), with the configuration (endpoint, certs, mTLS, etc) for the proxy. In addition, a `target` option is available to specify the URL of the target. Configured with `protocol = "odoh"`.
+
+Examples:
+
+ODoH client using Cloudflare as proxy and target (since there aren't any other public proxies as of Dec 2020).
+
+```toml
+[resolvers.cloudflare-odoh-proxy]
+protocol = "odoh"
+# Address of the oblivious DNS proxy server
+address = "https://odoh-noads-nl.alekberg.net/proxy"
+# Address of the target. The hostname and path are passed to the proxy for forwarding
+# of encrypted queries. No cert or bootstrap options for the target since the proxy
+# connects to it on the client's behalf
+target = "https://odoh.cloudflare-dns.com/dns-query"
+
+# The ODoH config/key of the Target. 
+target-config = "0000000secret...."
+# The ODoH config is usually hosted on the target under https://[target]/.well-known/odohconfigs 
+# If the target-config is not specified here, the resolver will request it automatically. Running the client with debug flags will also print the targets public key/config. This can then be copied to the config file, to avoid repeatedly fetching the key with every new launch of the client. 
+
+```
+
+Example config files: [odoh-client.toml](../cmd/routedns/example-config/odoh-client.toml)
 
 ### DNS-over-DTLS Resolver
 
