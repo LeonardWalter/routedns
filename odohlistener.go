@@ -24,6 +24,7 @@ package rdns
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -132,6 +133,11 @@ func (s *ODoHListener) Start() error {
 	return s.listener.ServeTLS(ln, "", "")
 }
 
+func (s *ODoHListener) Stop() error {
+	Log.WithFields(logrus.Fields{"id": s.id, "protocol": "doh", "addr": s.addr}).Info("stopping listener")
+	return s.listener.Shutdown(context.Background())
+}
+
 func (s *ODoHListener) ODoHproxyHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
@@ -189,9 +195,8 @@ func forwardProxyRequest(client *http.Client, targethost string, targetPath stri
 }
 
 func (s *ODoHListener) ODoHqueryHandler(w http.ResponseWriter, r *http.Request) {
-
 	qHeader := r.Header.Get("Content-Type")
-	if qHeader == "application/dns-message" {
+	if r.Method != "POST" || qHeader == "application/dns-message" {
 		if s.opt.AllowDoH {
 			Log.Debug("Forwarding DoH query")
 			s.doh.dohHandler(w, r)
@@ -205,10 +210,6 @@ func (s *ODoHListener) ODoHqueryHandler(w http.ResponseWriter, r *http.Request) 
 
 	if qHeader != "application/oblivious-dns-message" {
 		http.Error(w, "only contentType oblivious-dns-message allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	defer r.Body.Close()
