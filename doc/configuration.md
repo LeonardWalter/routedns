@@ -268,6 +268,29 @@ server-key = "example-config/server.key"
 
 Example config files: [doq-listener.toml](../cmd/routedns/example-config/doq-listener.toml)
 
+### Oblivious DNS over HTTPS (ODoH)
+
+ODoH ([RFC9230](https://datatracker.ietf.org/doc/rfc9230/)) 
+
+Providing the key-seed is not necessary if the listener is running in proxy mode. If it is not set, the listener will generate a new random key on each launch. A key seed can be manually generated using for example openssl: `openssl rand -hex 16`
+
+By default the ODoH listener listens on `/proxy` and `/dns-query`. Additionally, it will host its HPKE config under `/.well-known/odohconfigs`. If `odoh-mode  = "proxy"` is set, it will only listen and handle ODoH proxy requests on `/proxy`. If set to target the listener will only handle the ODoH queries on `/dns-query`.
+
+```toml
+[listeners.local-odoh]
+address = ":443"
+protocol = "odoh"
+resolver = "cloudflare"
+
+# The key seed is used to generate the HPKE keypair. 
+key-seed = "414dd55667a0cdff72dfbbd8515a9e0a"
+# odoh-mode allows restricting to only "proxy" mode or "target" mode. Default or left empty enables both modes.
+odoh-mode  = "target"
+# TLS information
+server-crt = "example-config/server.crt"
+server-key = "example-config/server.key"
+```
+
 ### Admin
 
 The Admin listener provides metrics on RouteDNS usage and performance at https://{address}/routedns/vars/ in [expvar](https://pkg.go.dev/expvar) format. These metrics can be exported to be usable by Prometheus using [prometheus-expvar-exporter](https://github.com/albertito/prometheus-expvar-exporter). An example configuration is provided below.
@@ -1589,11 +1612,11 @@ Example config files: [well-known.toml](../cmd/routedns/example-config/well-know
 
 ### Oblivious DNS (ODoH)
 
-ODoH ([draft](https://tools.ietf.org/html/draft-pauly-dprive-oblivious-doh-03)) is intended to improve privacy of **clients** by encrypting queries for a **target** DNS server while sending the query through a **proxy**. In this configuration, neither the target nor the proxy can see the query content and the source IP of the client at the same time. A client query is resolved as follows:
+ODoH ([RFC9230](https://datatracker.ietf.org/doc/rfc9230/)) is intended to improve privacy of **clients** by encrypting queries for a **target** DNS server while sending the query through a **proxy**. In this configuration, neither the target nor the proxy can see the query content and the source IP of the client at the same time. A client query is resolved as follows:
 
-- The client first queries the public key of the target resolver. This is a plain query that can be resolved by any resolver, but for privacy it's best to *not* use the target for this. RouteDNS always uses the proxy for this. The response is validated with DNSSEC.
+- If the clients target-config = "" parameter is not set, the client automatically queries the public key of the target resolver. This is a plain query that can be resolved by any resolver, but for privacy it's best to *not* use the target for this. RouteDNS first tries to use the proxy for this. The response is validated with DNSSEC. If this fails, it will alternatively request the key from the target directly. If the "target-config" is provided through the config file, these steps are omitted.
 - The client then encrypts the actual query with the public key of the target. A public key of the client is embedded in the encrypted message.
-- The encrypted query message is sent to the proxy, with information about which target it should be forwarded.
+- The encrypted query message is sent to the proxy, with information about which target it should be forwarded to.
 - The target then encrypts the response with the client key and responds to the proxy, which then forwards the response to the client.
 - The client decrypts the response it received from the proxy using its private key.
 
@@ -1616,7 +1639,7 @@ target = "https://odoh.cloudflare-dns.com/dns-query"
 # The ODoH config/key of the Target. 
 target-config = "0000000secret...."
 # The ODoH config is usually hosted on the target under https://[target]/.well-known/odohconfigs 
-# If the target-config is not specified here, the resolver will request it automatically. 
+# If the target-config is not specified here, the resolver will request it automatically. Running the client with debug flags will also print the targets public key/config. This can then be copied to the config file, to avoid repeatedly fetching the key with every new launch of the client. 
 
 ```
 
