@@ -7,7 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -170,13 +170,29 @@ func (d *DoHClient) buildRequest(msg []byte, ctx context.Context) (*http.Request
 	}
 }
 
+func (d *DoHClient) resetQuicTransport() error {
+	tr, err := dohQuicTransport(d.endpoint, d.opt)
+	if err != nil {
+		return err
+	}
+	d.client.Transport = tr
+	return nil
+}
+
 func (d *DoHClient) do(req *http.Request) (*http.Response, error) {
 	resp, err := d.client.Do(req)
 	if err != nil {
+		// If it's a QUIC-related / 0-RTT error, reset token store and retry
+		if d.opt.Transport == "quic" {
+			if err := d.resetQuicTransport(); err != nil {
+				return nil, fmt.Errorf("failed to reset QUIC transport: %w", err)
+			}
+			return d.client.Do(req)
+		}
 		d.metrics.err.Add(req.Method, 1)
 		return nil, err
 	}
-	return resp, err
+	return resp, nil
 }
 
 func (d *DoHClient) buildPostRequest(msg []byte, ctx context.Context) (*http.Request, error) {
@@ -232,7 +248,7 @@ func (d *DoHClient) responseFromHTTP(resp *http.Response) (*dns.Msg, error) {
 		d.metrics.err.Add(fmt.Sprintf("http%d", resp.StatusCode), 1)
 		return nil, fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
-	rb, err := ioutil.ReadAll(resp.Body)
+	rb, err := io.ReadAll(resp.Body)
 	if err != nil {
 		d.metrics.err.Add("read", 1)
 		return nil, err

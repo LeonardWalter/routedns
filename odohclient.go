@@ -36,13 +36,13 @@ type ODoHClient struct {
 
 var _ Resolver = &DoHClient{}
 
-func NewODoHClient(id, endpoint, target string, targetConfig string, opt DoHClientOptions) (*ODoHClient, error) {
-	if endpoint == "" {	
+func NewODoHClient(id, proxy, target string, targetConfig string, opt DoHClientOptions) (*ODoHClient, error) {
+	if proxy == "" {
 		Log.Info("Attention: no ODoH proxy defined")
-		endpoint = target
+		proxy = target
 	}
 
-	proxy, err := NewDoHClient(id, endpoint, opt)
+	dohProxy, err := NewDoHClient(id, proxy, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func NewODoHClient(id, endpoint, target string, targetConfig string, opt DoHClie
 
 	return &ODoHClient{
 		id:               id,
-		proxy:            proxy,
+		proxy:            dohProxy,
 		targetName:       u.Hostname(),
 		targetPath:       u.Path,
 		odohConfigString: targetConfig,
@@ -174,11 +174,10 @@ func (d *ODoHClient) getTargetConfig() (*odoh.ObliviousDoHConfig, error) {
 		d.odohConfig = &odohConfigs.Configs[0]
 	} else {
 		if d.odohConfig == nil || time.Now().After(d.odohConfigExpiry) {
-			d.odohConfig, d.odohConfigExpiry, err = d.refreshTargetKey()
-		}
-
-		if err != nil {
+			// 	d.odohConfig, d.odohConfigExpiry, err = d.refreshTargetKey()
+			//if err != nil {
 			d.odohConfig, d.odohConfigExpiry, err = d.fetchTargetConfig()
+			//}
 		}
 	}
 
@@ -188,6 +187,7 @@ func (d *ODoHClient) getTargetConfig() (*odoh.ObliviousDoHConfig, error) {
 	return d.odohConfig, err
 }
 
+/* outdated as of official ODoH RFC
 // Load the key by making a DoH query to the proxy, then cache it.
 func (d *ODoHClient) refreshTargetKey() (*odoh.ObliviousDoHConfig, time.Time, error) {
 	query := new(dns.Msg)
@@ -223,7 +223,7 @@ func (d *ODoHClient) refreshTargetKey() (*odoh.ObliviousDoHConfig, time.Time, er
 		}
 	}
 	return nil, time.Time{}, fmt.Errorf("no key found for target %q", d.targetName)
-}
+}*/
 
 func (d *ODoHClient) fetchTargetConfig() (*odoh.ObliviousDoHConfig, time.Time, error) {
 	var url string = "https://" + d.targetName + ODOH_CONFIG_PATH

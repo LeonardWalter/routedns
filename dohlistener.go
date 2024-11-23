@@ -94,7 +94,7 @@ func NewDoHListener(id, addr string, opt DoHListenerOptions, resolver Resolver) 
 		metrics: NewDoHListenerMetrics(id),
 	}
 	if !l.opt.isChild {
-	http.HandleFunc("/dns-query", l.dohHandler)
+		http.HandleFunc("/dns-query", l.dohHandler)
 	}
 	return l, nil
 }
