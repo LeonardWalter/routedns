@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -116,7 +116,7 @@ func (l *HTTPLoader) loadFromDisk() ([]string, error) {
 }
 
 func (l *HTTPLoader) writeToDisk(rules []string) (err error) {
-	f, err := ioutil.TempFile(l.opt.CacheDir, "routedns")
+	f, err := io.TempFile(l.opt.CacheDir, "routedns")
 	if err != nil {
 		return
 	}
