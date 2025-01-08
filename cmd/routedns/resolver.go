@@ -105,6 +105,29 @@ func instantiateResolver(id string, r resolver, resolvers map[string]rdns.Resolv
 		if err != nil {
 			return err
 		}
+	case "mdoh":
+		resolvers[id], err = rdns.NewMASQUEClient(id, r.Address, r.Target, rdns.MASQUEClientOptions{QueryTimeout: time.Duration(r.QueryTimeout) * time.Second})
+		if err != nil {
+			return err
+		}
+	case "mdoq":
+		r.Address = rdns.AddressWithDefault(r.Address, rdns.DoQPort)
+
+		tlsConfig, err := rdns.TLSClientConfig(r.CA, r.ClientCrt, r.ClientKey, r.ServerName)
+		if err != nil {
+			return err
+		}
+		opt := rdns.DoQClientOptions{
+			BootstrapAddr: r.BootstrapAddr,
+			LocalAddr:     net.ParseIP(r.LocalAddr),
+			TLSConfig:     tlsConfig,
+			QueryTimeout:  time.Duration(r.QueryTimeout) * time.Second,
+			Use0RTT:       r.Use0RTT,
+		}
+		resolvers[id], err = rdns.NewMDoQClient(id, r.Address, r.Target, opt)
+		if err != nil {
+			return err
+		}
 	case "tcp", "udp":
 		r.Address = rdns.AddressWithDefault(r.Address, rdns.PlainDNSPort)
 
