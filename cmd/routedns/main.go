@@ -324,6 +324,21 @@ func start(opt options, args []string) error {
 				return err
 			}
 			listeners = append(listeners, ln)
+		case "masque":
+			l.Address = rdns.AddressWithDefault(l.Address, rdns.DohQuicPort)
+			tlsConfig, err := rdns.TLSServerConfig(l.CA, l.ServerCrt, l.ServerKey, l.MutualTLS)
+			if err != nil {
+				return err
+			}
+			opt := rdns.MASQUEListenerOptions{
+				TLSConfig:  tlsConfig,
+				ServerName: l.ServerName,
+			}
+			ln, err := rdns.NewMASQUEListener(id, l.Address, opt)
+			if err != nil {
+				return err
+			}
+			listeners = append(listeners, ln)
 		default:
 			return fmt.Errorf("unsupported protocol '%s' for listener '%s'", l.Protocol, id)
 		}
