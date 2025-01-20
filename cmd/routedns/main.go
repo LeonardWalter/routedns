@@ -317,6 +317,7 @@ func start(opt options, args []string) error {
 				KeySeed:       l.KeySeed,
 				OdohMode:      l.OdohMode,
 				AllowDoH:      l.AllowDoH,
+				Transport:     l.Transport,
 				ListenOptions: opt,
 			}
 			ln, err := rdns.NewODoHListener(id, l.Address, opt, resolver)

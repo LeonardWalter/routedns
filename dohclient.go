@@ -79,6 +79,7 @@ type DoHClient struct {
 	client   *http.Client
 	opt      DoHClientOptions
 	metrics  *ListenerMetrics
+	lastUsed time.Time
 }
 
 var _ Resolver = &DoHClient{}
