@@ -30,11 +30,11 @@ const (
 
 // ODoHListener is an Oblivious DNS over HTTPS listener.
 type ODoHListener struct {
-	id          string
-	addr        string
-	proxyClient *http.Client // Client for proxy forwarding if acting as ODoH proxy
-	doh         *DoHListener
-	config      []byte
+	id         string
+	addr       string
+	dohClientP *DoHClientPool // Client pool for proxy forwarding if acting as ODoH proxy
+	dohServer  *DoHListener
+	config     []byte
 
 	r           Resolver // Forwarding DNS queries if acting as ODoH Target
 	opt         ODoHListenerOptions
@@ -47,6 +47,7 @@ type ODoHListenerOptions struct {
 	OdohMode  string
 	AllowDoH  bool
 	KeySeed   string
+	Transport string
 	TLSConfig *tls.Config
 }
 
@@ -65,9 +66,9 @@ func NewODoHListener(id, addr string, opt ODoHListenerOptions, resolver Resolver
 		addr:        addr,
 		r:           resolver,
 		opt:         opt,
-		proxyClient: &http.Client{},
 		odohKeyPair: keyPair,
 		config:      configSet.Marshal(),
+		dohClientP:  NewDoHClientPool(10),
 	}
 
 	mux := http.NewServeMux()
@@ -84,6 +85,7 @@ func NewODoHListener(id, addr string, opt ODoHListenerOptions, resolver Resolver
 	}
 
 	dohOpt := DoHListenerOptions{
+		Transport: opt.Transport,
 		TLSConfig: opt.TLSConfig,
 		customMux: mux,
 	}
@@ -92,16 +94,16 @@ func NewODoHListener(id, addr string, opt ODoHListenerOptions, resolver Resolver
 		return nil, fmt.Errorf("failed to spawn DoH listener:  %w", err)
 	}
 
-	l.doh = dohListen
+	l.dohServer = dohListen
 	return l, nil
 }
 
 func (s *ODoHListener) Start() error {
-	return s.doh.Start()
+	return s.dohServer.Start()
 }
 
 func (s *ODoHListener) Stop() error {
-	return s.doh.Stop()
+	return s.dohServer.Stop()
 }
 
 func (s *ODoHListener) ODoHproxyHandler(w http.ResponseWriter, r *http.Request) {
@@ -138,11 +140,31 @@ func (s *ODoHListener) ODoHproxyHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	client, err := s.dohClientP.GetClient(host)
+	if err != nil {
+		var err error
+		tlsConfig, err := TLSClientConfig("", "", "", host)
+		if err != nil {
+			return
+		}
+		opt := DoHClientOptions{
+			Method:    r.Method,
+			Transport: s.opt.Transport,
+			TLSConfig: tlsConfig,
+		}
+		client, err = s.dohClientP.AddClient(host, path, opt)
+		if err != nil {
+			Log.Warn("Adding new client failed")
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	Log.Debug("forwarding query to ODoH target",
 		slog.String("client", r.RemoteAddr),
 		slog.String("target", host),
 	)
-	response, err := forwardProxyRequest(s.proxyClient, host, path, b, contentType)
+	response, err := forwardProxyRequest(client, host, path, b, contentType)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
@@ -181,7 +203,7 @@ func (s *ODoHListener) ODoHqueryHandler(w http.ResponseWriter, r *http.Request) 
 	if r.Method != http.MethodPost || qHeader == DOH_CONTENT_TYPE {
 		if s.opt.AllowDoH {
 			Log.Debug("Forwarding DoH query")
-			s.doh.dohHandler(w, r)
+			s.dohServer.dohHandler(w, r)
 			return
 		} else {
 			Log.Debug("DoH queries disabled, dropping DoH message")
