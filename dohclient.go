@@ -172,13 +172,29 @@ func (d *DoHClient) buildRequest(ctx context.Context, msg []byte) (*http.Request
 	}
 }
 
+func (d *DoHClient) resetQuicTransport() error {
+	tr, err := dohQuicTransport(d.endpoint, d.opt)
+	if err != nil {
+		return err
+	}
+	d.client.Transport = tr
+	return nil
+}
+
 func (d *DoHClient) do(req *http.Request) (*http.Response, error) {
 	resp, err := d.client.Do(req)
 	if err != nil {
+		// If it's a QUIC-related / 0-RTT error, reset token store and retry
+		if d.opt.Transport == "quic" && errors.Is(err, quic.Err0RTTRejected) {
+			if err := d.resetQuicTransport(); err != nil {
+				return nil, fmt.Errorf("failed to reset QUIC transport: %w", err)
+			}
+			return d.client.Do(req)
+		}
 		d.metrics.err.Add(req.Method, 1)
 		return nil, err
 	}
-	return resp, err
+	return resp, nil
 }
 
 func (d *DoHClient) buildPostRequest(ctx context.Context, msg []byte) (*http.Request, error) {
