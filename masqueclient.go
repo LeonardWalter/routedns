@@ -69,7 +69,7 @@ func SetupMasque(proxyURITemplate *uritemplate.Template, url string) *http.Clien
 	}
 	host, err := extractHostPort(url)
 	if err != nil {
-		Log.Fatalf("failed to parse url: %v", err)
+		Log.Error("failed to parse url:", "error", err)
 	}
 
 	return &http.Client{
@@ -81,9 +81,9 @@ func SetupMasque(proxyURITemplate *uritemplate.Template, url string) *http.Clien
 				}
 				pconn, _, err := cl.Dial(context.Background(), proxyURITemplate, raddr)
 				if err != nil {
-					Log.Fatal("dialing MASQUE failed:", err)
+					Log.Error("dialing MASQUE failed:", "error", err)
 				}
-				Log.Printf("dialed connection: %s <-> %s", pconn.LocalAddr(), raddr)
+				Log.Error(fmt.Sprintf("dialed connection: %s <-> %s", pconn.LocalAddr(), raddr))
 				return quic.DialEarly(ctx, pconn, raddr, tlsConf, &quic.Config{DisablePathMTUDiscovery: true})
 			},
 		},
@@ -101,7 +101,7 @@ func extractHostPort(target string) (string, error) {
 	if _, _, err := net.SplitHostPort(host); err != nil {
 		host = net.JoinHostPort(u.Hostname(), "443")
 	}
-	Log.Debug("old:", target, " new: ", host)
+	Log.Debug("old: " + target + " new: " + host)
 	return host, nil
 }
 

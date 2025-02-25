@@ -28,6 +28,7 @@ type listener struct {
 	CA         string
 	ServerKey  string   `toml:"server-key"`
 	ServerCrt  string   `toml:"server-crt"`
+	ServerName string   `toml:"server-name"`
 	MutualTLS  bool     `toml:"mutual-tls"`
 	NoTLS      bool     `toml:"no-tls"` // Disable TLS in DoH servers
 	AllowedNet []string `toml:"allowed-net"`
