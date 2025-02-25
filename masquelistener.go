@@ -7,7 +7,6 @@ import (
 
 	"github.com/quic-go/masque-go"
 	"github.com/quic-go/quic-go/http3"
-	"github.com/sirupsen/logrus"
 	"github.com/yosida95/uritemplate/v3"
 )
 
@@ -69,7 +68,7 @@ func (s *MASQUEListener) String() string {
 
 // Start the DoH server with QUIC transport.
 func (s *MASQUEListener) Start() error {
-	Log.WithFields(logrus.Fields{"id": s.id, "protocol": "mdoh", "addr": s.addr}).Info("starting MASQUE listener")
+	Log.Debug("starting MASQUE listener")
 	s.quicServer = &http3.Server{
 		Addr:            s.addr,
 		TLSConfig:       s.opt.TLSConfig,
@@ -80,6 +79,6 @@ func (s *MASQUEListener) Start() error {
 
 // Stop the server.
 func (s *MASQUEListener) Stop() error {
-	Log.WithFields(logrus.Fields{"id": s.id, "protocol": "mdoh", "addr": s.addr}).Info("stopping listener")
+	Log.Debug("stopping listener")
 	return s.quicServer.Close()
 }

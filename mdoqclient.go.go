@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
 
@@ -53,7 +53,7 @@ func NewMDoQClient(id, proxy string, endpoint string, opt DoQClientOptions) (*MD
 func initMasque(template *uritemplate.Template, url string) (net.PacketConn, error) {
 	raddr, err := net.ResolveUDPAddr("udp", url)
 	if err != nil {
-		log.Fatalf("failed to resolve udp addr: %v", err)
+		Log.Error("failed to resolve udp addr:", "error", err)
 		return nil, err
 	}
 
@@ -64,10 +64,10 @@ func initMasque(template *uritemplate.Template, url string) (net.PacketConn, err
 		},
 	}
 
-	Log.Printf("parsed url: %s -> %s", url, raddr)
+	Log.Debug(fmt.Sprintf("parsed url: %s -> %s", url, raddr))
 	pconn, _, err := cl.Dial(context.Background(), template, raddr)
 	if err != nil {
-		log.Fatalf("failed to dial masque proxy: %v", err)
+		Log.Error("failed to dial masque proxy:", "error", err)
 		return nil, err
 	}
 	return pconn, err
@@ -76,7 +76,7 @@ func initMasque(template *uritemplate.Template, url string) (net.PacketConn, err
 func (d *MDoQClient) masqueDial(endpoint string) (quic.EarlyConnection, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", endpoint)
 	if err != nil {
-		Log.WithError(err).Debug("couldn't resolve remote addr (" + endpoint + ") for UDP quic client")
+		Log.Debug("couldn't resolve remote addr (" + endpoint + ") for UDP quic client")
 		return nil, err
 	}
 
@@ -87,7 +87,7 @@ func (d *MDoQClient) masqueDial(endpoint string) (quic.EarlyConnection, error) {
 	if err != nil {
 		// don't leak filehandles / sockets; if we got here udpConn must exist
 		_ = d.PacketConn.Close()
-		Log.WithError(err).Debug("couldn't dial quic early connection")
+		Log.Debug("couldn't dial quic early connection")
 		return nil, err
 	}
 
@@ -97,7 +97,7 @@ func (d *MDoQClient) masqueDial(endpoint string) (quic.EarlyConnection, error) {
 func (d *MDoQClient) getMasqueStream() (quic.Stream, error) {
 	stream, err := d.EarlyConnection.OpenStream()
 	if err != nil {
-		Log.WithError(err).Debug("temporary fail when trying to open stream, attempting new connection")
+		Log.Debug("temporary fail when trying to open stream, attempting new connection")
 	}
 	Log.Debug("got new stream")
 	return stream, err
@@ -108,7 +108,7 @@ func (d *MDoQClient) Resolve(q *dns.Msg, ci ClientInfo) (*dns.Msg, error) {
 	if d.PacketConn == nil {
 		conn, err := initMasque(d.template, d.target)
 		if err != nil {
-			log.Fatalf("failed to connect to masque proxy: %v", err)
+			Log.Error("failed to connect to masque proxy:", "error", err)
 			return nil, err
 		}
 		d.PacketConn = conn
@@ -118,7 +118,7 @@ func (d *MDoQClient) Resolve(q *dns.Msg, ci ClientInfo) (*dns.Msg, error) {
 	if d.EarlyConnection == nil {
 		conn, err := d.masqueDial(d.target)
 		if err != nil {
-			log.Fatalf("failed to dial target via masque proxy: %v", err)
+			Log.Error("failed to dial target via masque proxy:", "error", err)
 			return nil, err
 		}
 		Log.Debug("got new Early Conn")
