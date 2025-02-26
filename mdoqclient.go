@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
 	"time"
@@ -51,21 +50,14 @@ func NewMDoQClient(id, proxy string, endpoint string, opt DoQClientOptions) (*MD
 }
 
 func initMasque(template *uritemplate.Template, url string) (net.PacketConn, error) {
-	raddr, err := net.ResolveUDPAddr("udp", url)
-	if err != nil {
-		Log.Error("failed to resolve udp addr:", "error", err)
-		return nil, err
-	}
-
 	cl := masque.Client{
 		QUICConfig: &quic.Config{
 			EnableDatagrams:   true,
-			InitialPacketSize: 1350,
+			InitialPacketSize: 1320,
 		},
 	}
 
-	Log.Debug(fmt.Sprintf("parsed url: %s -> %s", url, raddr))
-	pconn, _, err := cl.Dial(context.Background(), template, raddr)
+	pconn, _, err := cl.DialAddr(context.Background(), template, url)
 	if err != nil {
 		Log.Error("failed to dial masque proxy:", "error", err)
 		return nil, err
@@ -74,14 +66,22 @@ func initMasque(template *uritemplate.Template, url string) (net.PacketConn, err
 }
 
 func (d *MDoQClient) masqueDial(endpoint string) (quic.EarlyConnection, error) {
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		Log.Error("failed to parse target address:", "error", err)
+		return nil, err
+	}
+
 	udpAddr, err := net.ResolveUDPAddr("udp", endpoint)
 	if err != nil {
 		Log.Debug("couldn't resolve remote addr (" + endpoint + ") for UDP quic client")
 		return nil, err
 	}
 
-	tlsConfig := new(tls.Config)
-	tlsConfig.NextProtos = []string{"doq"}
+	tlsConfig := &tls.Config{
+		NextProtos: []string{"doq"},
+		ServerName: host,
+	}
 	// use DialEarly so that we attempt to use 0-RTT DNS queries, it's lower latency (if the server supports it)
 	earlyConn, err := quic.DialEarly(context.Background(), d.PacketConn, udpAddr, tlsConfig, &quic.Config{DisablePathMTUDiscovery: true})
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/quic-go/masque-go"
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/yosida95/uritemplate/v3"
 )
@@ -73,6 +74,7 @@ func (s *MASQUEListener) Start() error {
 		Addr:            s.addr,
 		TLSConfig:       s.opt.TLSConfig,
 		EnableDatagrams: true,
+		QUICConfig:      &quic.Config{DisablePathMTUDiscovery: true, InitialPacketSize: 1350},
 	}
 	return s.quicServer.ListenAndServe()
 }

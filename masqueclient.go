@@ -64,7 +64,7 @@ func SetupMasque(proxyURITemplate *uritemplate.Template, url string) *http.Clien
 	cl := masque.Client{
 		QUICConfig: &quic.Config{
 			EnableDatagrams:   true,
-			InitialPacketSize: 1350,
+			InitialPacketSize: 1320,
 		},
 	}
 	host, err := extractHostPort(url)
@@ -81,10 +81,14 @@ func SetupMasque(proxyURITemplate *uritemplate.Template, url string) *http.Clien
 				}
 				pconn, _, err := cl.Dial(context.Background(), proxyURITemplate, raddr)
 				if err != nil {
-					Log.Error("dialing MASQUE failed:", "error", err)
+					Log.Error("dialing MASQUE proxy failed:", "error", err)
 				}
-				Log.Error(fmt.Sprintf("dialed connection: %s <-> %s", pconn.LocalAddr(), raddr))
-				return quic.DialEarly(ctx, pconn, raddr, tlsConf, &quic.Config{DisablePathMTUDiscovery: true})
+				Log.Debug(fmt.Sprintf("dialed connection: %s <-> %s", pconn.LocalAddr(), raddr))
+				ec, err := quic.DialEarly(ctx, pconn, raddr, tlsConf, &quic.Config{DisablePathMTUDiscovery: true})
+				if err != nil {
+					Log.Error("dialing MASQUE target failed:", "error", err)
+				}
+				return ec, err
 			},
 		},
 	}
