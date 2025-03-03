@@ -46,7 +46,10 @@ type DoHClientOptions struct {
 	// Optional dialer, e.g. proxy
 	Dialer Dialer
 
-	Use0RTT bool
+	Use0RTT     bool
+	UseECH      bool
+	Rs          map[string]Resolver
+	ECHresolver string
 }
 
 // Returns an HTTP client based on the DoH options
@@ -120,6 +123,22 @@ func NewDoHClient(id, endpoint string, opt DoHClientOptions) (*DoHClient, error)
 
 // Resolve a DNS query.
 func (d *DoHClient) Resolve(q *dns.Msg, ci ClientInfo) (*dns.Msg, error) {
+	if d.opt.UseECH && d.opt.ECHresolver != "done" {
+		u, err := url.Parse(d.endpoint)
+		if err != nil {
+			return nil, err
+		}
+
+		echConfig, echTarget, err := GetECHConfigFromDNS(u.Hostname(), d.opt)
+		if err != nil {
+			return nil, fmt.Errorf("could not fetch ECH config '%s'", err)
+		}
+		d.opt.TLSConfig.MinVersion = tls.VersionTLS13
+		d.opt.TLSConfig.EncryptedClientHelloConfigList = echConfig
+		d.opt.TLSConfig.ServerName = echTarget
+		d.opt.ECHresolver = "done"
+	}
+
 	// Packing a message is not always a read-only operation, make a copy
 	q = q.Copy()
 	log := logger(d.id, q, ci)
@@ -476,4 +495,52 @@ func (e *earlyConnWrapper) HandshakeComplete() <-chan struct{} {
 
 func (e *earlyConnWrapper) NextConnection(ctx context.Context) (quic.Connection, error) {
 	return nil, fmt.Errorf("NextConnection not supported for non-0RTT connections")
+}
+
+func GetECHConfigFromDNS(serverName string, opt DoHClientOptions) ([]byte, string, error) {
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(serverName), dns.TypeHTTPS)
+
+	var resp *dns.Msg
+	var resolvErr error
+	if opt.ECHresolver != "" {
+		resp, resolvErr = opt.Rs[opt.ECHresolver].Resolve(msg, ClientInfo{})
+	} else {
+		ECHresolver, err := NewDoHClient("echTemp", "https://1.1.1.1/dns-query{?dns}", DoHClientOptions{})
+		if err != nil {
+			return nil, "", fmt.Errorf("could not instantiate DoH resolvers for ECH config fetch, last error: %v", err)
+		}
+		resp, resolvErr = ECHresolver.Resolve(msg, ClientInfo{})
+	}
+
+	if resolvErr != nil {
+		return nil, "", fmt.Errorf("ech DNS resolvers failed, last error: %v", resolvErr)
+	}
+	if resp.Rcode != dns.RcodeSuccess {
+		return nil, "", fmt.Errorf("DNS query returned error code: %d", resp.Rcode)
+	}
+
+	for _, ans := range resp.Answer {
+		if https, ok := ans.(*dns.HTTPS); ok {
+			echConfig, err := parseHTTPSForECH(https)
+			if err == nil {
+				return echConfig, https.Target, nil
+			}
+		}
+	}
+
+	return nil, "", errors.New("no ECH configuration found in DNS records")
+}
+
+func parseHTTPSForECH(https *dns.HTTPS) ([]byte, error) {
+	for _, kv := range https.Value {
+		if kv.Key() == dns.SVCB_ECHCONFIG {
+			echConfig, err := base64.StdEncoding.DecodeString(kv.String())
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode ECH config: %v", err)
+			}
+			return echConfig, nil
+		}
+	}
+	return nil, errors.New("no ECH parameter found in HTTPS record")
 }

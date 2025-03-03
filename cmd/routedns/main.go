@@ -291,6 +291,7 @@ func start(opt options, args []string) error {
 				Transport:     l.Transport,
 				HTTPProxyNet:  httpProxyNet,
 				NoTLS:         l.NoTLS,
+				ECHKeyFile:    l.ECHKeyFile,
 			}
 			ln, err := rdns.NewDoHListener(id, l.Address, opt, resolver)
 			if err != nil {

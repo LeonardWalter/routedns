@@ -83,6 +83,9 @@ func instantiateResolver(id string, r resolver, resolvers map[string]rdns.Resolv
 			QueryTimeout:  time.Duration(r.QueryTimeout) * time.Second,
 			Dialer:        socks5DialerFromConfig(r),
 			Use0RTT:       r.Use0RTT,
+			UseECH:        r.UseECH,
+			ECHresolver:   r.ECHresolver,
+			Rs:            resolvers,
 		}
 		resolvers[id], err = rdns.NewDoHClient(id, r.Address, opt)
 		if err != nil {

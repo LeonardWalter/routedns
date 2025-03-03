@@ -35,6 +35,7 @@ type listener struct {
 	OdohMode   string   `toml:"odoh-mode"` // ODoH mode - accepts "proxy", "target" or "dual", default is target mode
 	AllowDoH   bool     `toml:"allow-doh"` // Allow ODoH listeners to also handle DoH queries to /dns-query
 	Frontend   dohFrontend
+	ECHKeyFile string `toml:"ech-key-file"`
 }
 
 // DoH listener frontend options
@@ -64,6 +65,9 @@ type resolver struct {
 
 	//QUIC and DoH/3 configuration
 	Use0RTT bool `toml:"enable-0rtt"`
+
+	UseECH      bool   `toml:"enable-ech"`
+	ECHresolver string `toml:"ech-resolver"`
 
 	// URL for Oblivious DNS target
 	Target       string `toml:"target"`

@@ -2,13 +2,18 @@ package rdns
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"expvar"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -17,6 +22,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/crypto/cryptobyte"
 )
 
 // Read/Write timeout in the DoH server
@@ -53,6 +59,8 @@ type DoHListenerOptions struct {
 	NoTLS bool
 	// Custom request handler used with the Oblivious listener
 	customMux *http.ServeMux
+	// Path to file containing ECH keypair
+	ECHKeyFile string
 }
 
 type DoHListenerMetrics struct {
@@ -93,6 +101,16 @@ func NewDoHListener(id, addr string, opt DoHListenerOptions, resolver Resolver) 
 		r:       resolver,
 		opt:     opt,
 		metrics: NewDoHListenerMetrics(id),
+	}
+
+	if opt.ECHKeyFile != "" {
+		echKey, err := parseECHKeyFile(opt.ECHKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("problem loading ECH config: '%s'", err.Error())
+		}
+		opt.TLSConfig.MinVersion = tls.VersionTLS13
+		opt.TLSConfig.EncryptedClientHelloKeys = []tls.EncryptedClientHelloKey{echKey}
+		Log.Debug("successfully loaded ECH keys")
 	}
 
 	if opt.customMux == nil {
@@ -304,4 +322,38 @@ func (s *DoHListener) parseAndRespond(b []byte, w http.ResponseWriter, r *http.R
 	}
 	w.Header().Set("content-type", "application/dns-message")
 	_, _ = w.Write(out)
+}
+
+func parseECHKeyFile(keyPath string) (tls.EncryptedClientHelloKey, error) {
+	data, err := os.ReadFile(keyPath)
+	if err != nil || len(data) == 0 {
+		return tls.EncryptedClientHelloKey{}, fmt.Errorf("failed to read ECH key file: %v", err)
+	}
+
+	block1, block2 := pem.Decode(data)
+	if block1 == nil || block1.Type != "PRIVATE KEY" {
+		return tls.EncryptedClientHelloKey{}, fmt.Errorf("invalid PRIVATE KEY pem")
+	}
+
+	pkeyInterface, err := x509.ParsePKCS8PrivateKey(block1.Bytes)
+	if err != nil {
+		log.Fatalf("Failed to decode ECH PRIVATE KEY: %v", err)
+	}
+
+	ecdhPrivateKey, ok := pkeyInterface.(*ecdh.PrivateKey)
+	if !ok {
+		log.Fatal("Expected ECDH private key type")
+	}
+
+	conf, _ := pem.Decode(block2)
+	if conf == nil || conf.Type != "ECHCONFIG" {
+		return tls.EncryptedClientHelloKey{}, fmt.Errorf("invalid ECHCONFIG pem")
+	}
+
+	var echConfig []byte
+	reader := cryptobyte.String(conf.Bytes)
+	if !reader.ReadUint16LengthPrefixed((*cryptobyte.String)(&echConfig)) {
+		log.Fatalf("Failed to read ECH pKey from the list")
+	}
+	return tls.EncryptedClientHelloKey{Config: echConfig, PrivateKey: ecdhPrivateKey.Bytes(), SendAsRetry: false}, nil
 }
