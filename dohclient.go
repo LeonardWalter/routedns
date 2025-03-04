@@ -46,10 +46,12 @@ type DoHClientOptions struct {
 	// Optional dialer, e.g. proxy
 	Dialer Dialer
 
-	Use0RTT     bool
-	UseECH      bool
-	Rs          map[string]Resolver
-	ECHresolver string
+	Use0RTT bool
+
+	UseECH       bool
+	ResolverList map[string]Resolver
+	ECHresolver  string
+	echAddress   string
 }
 
 // Returns an HTTP client based on the DoH options
@@ -123,20 +125,11 @@ func NewDoHClient(id, endpoint string, opt DoHClientOptions) (*DoHClient, error)
 
 // Resolve a DNS query.
 func (d *DoHClient) Resolve(q *dns.Msg, ci ClientInfo) (*dns.Msg, error) {
-	if d.opt.UseECH && d.opt.ECHresolver != "done" {
-		u, err := url.Parse(d.endpoint)
+	if d.opt.UseECH {
+		err := d.ProcessECH()
 		if err != nil {
 			return nil, err
 		}
-
-		echConfig, echTarget, err := GetECHConfigFromDNS(u.Hostname(), d.opt)
-		if err != nil {
-			return nil, fmt.Errorf("could not fetch ECH config '%s'", err)
-		}
-		d.opt.TLSConfig.MinVersion = tls.VersionTLS13
-		d.opt.TLSConfig.EncryptedClientHelloConfigList = echConfig
-		d.opt.TLSConfig.ServerName = echTarget
-		d.opt.ECHresolver = "done"
 	}
 
 	// Packing a message is not always a read-only operation, make a copy
@@ -201,7 +194,7 @@ func (d *DoHClient) do(req *http.Request) (*http.Response, error) {
 
 func (d *DoHClient) buildPostRequest(ctx context.Context, msg []byte) (*http.Request, error) {
 	// The URL could be a template. Process it without values since POST doesn't use variables in the URL.
-	u, err := d.template.Expand(map[string]interface{}{})
+	u, err := d.template.Expand(map[string]any{})
 	if err != nil {
 		d.metrics.err.Add("template", 1)
 		return nil, err
@@ -222,7 +215,7 @@ func (d *DoHClient) buildGetRequest(ctx context.Context, msg []byte) (*http.Requ
 	b64 := base64.RawURLEncoding.EncodeToString(msg)
 
 	// The URL must be a template. Process it with the "dns" param containing the encoded query.
-	u, err := d.template.Expand(map[string]interface{}{"dns": b64})
+	u, err := d.template.Expand(map[string]any{"dns": b64})
 	if err != nil {
 		d.metrics.err.Add("template", 1)
 		return nil, err
@@ -284,7 +277,7 @@ func dohTcpTransport(opt DoHClientOptions) (http.RoundTripper, error) {
 	}
 
 	// Use a custom dialer if a bootstrap address or local address was provided
-	if opt.BootstrapAddr != "" || opt.LocalAddr != nil || opt.Dialer != nil {
+	if opt.BootstrapAddr != "" || opt.echAddress != "" || opt.LocalAddr != nil || opt.Dialer != nil {
 		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: opt.LocalAddr}}
 		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if opt.BootstrapAddr != "" {
@@ -293,6 +286,8 @@ func dohTcpTransport(opt DoHClientOptions) (http.RoundTripper, error) {
 					return nil, err
 				}
 				addr = net.JoinHostPort(opt.BootstrapAddr, port)
+			} else if opt.echAddress != "" {
+				addr = opt.echAddress
 			}
 			if opt.Dialer != nil {
 				return opt.Dialer.Dial(network, addr)
@@ -326,13 +321,18 @@ func dohQuicTransport(endpoint string, opt DoHClientOptions) (http.RoundTripper,
 	dialer := func(ctx context.Context, addr string, tlsConfig *tls.Config, config *quic.Config) (quic.EarlyConnection, error) {
 		return newQuicConnection(u.Hostname(), addr, lAddr, tlsConfig, config, opt.Use0RTT)
 	}
-	if opt.BootstrapAddr != "" {
+	if opt.BootstrapAddr != "" || opt.echAddress != "" {
 		dialer = func(ctx context.Context, addr string, tlsConfig *tls.Config, config *quic.Config) (quic.EarlyConnection, error) {
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
+			if opt.BootstrapAddr != "" {
+				_, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				addr = net.JoinHostPort(opt.BootstrapAddr, port)
+			} else if opt.echAddress != "" {
+				addr = opt.echAddress
+				Log.Debug("replaced ip with ech ip", "url", addr)
 			}
-			addr = net.JoinHostPort(opt.BootstrapAddr, port)
 			return newQuicConnection(u.Hostname(), addr, lAddr, tlsConfig, config, opt.Use0RTT)
 		}
 	}
@@ -497,50 +497,105 @@ func (e *earlyConnWrapper) NextConnection(ctx context.Context) (quic.Connection,
 	return nil, fmt.Errorf("NextConnection not supported for non-0RTT connections")
 }
 
-func GetECHConfigFromDNS(serverName string, opt DoHClientOptions) ([]byte, string, error) {
+type HTTPSrr struct {
+	echConfig []byte
+	target    string
+	ipv4hint  string
+	ipv6hint  string
+}
+
+func (d *DoHClient) ProcessECH() error {
+	u, err := url.Parse(d.endpoint)
+	if err != nil {
+		return err
+	}
+
+	httpsrr, err := GetECHConfigFromDNS(u.Hostname(), d.opt)
+	if err != nil {
+		return fmt.Errorf("could not fetch ECH config '%s'", err)
+	}
+
+	var ip string
+	if httpsrr.ipv4hint != "" {
+		ip = httpsrr.ipv4hint
+	} else if httpsrr.ipv6hint != "" {
+		ip = httpsrr.ipv6hint
+	}
+
+	if ip != "" && net.ParseIP(ip) != nil {
+		d.opt.echAddress = net.JoinHostPort(ip, u.Port())
+		Log.Debug("Connecting to advertised IP from HTTPS RR from now on")
+	}
+
+	tlsConfig := d.opt.TLSConfig
+	tlsConfig.MinVersion = tls.VersionTLS13
+	tlsConfig.EncryptedClientHelloConfigList = httpsrr.echConfig
+	tlsConfig.ServerName = httpsrr.target
+	d.opt.UseECH = false
+
+	d.client, err = d.opt.client("https://" + httpsrr.target)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func GetECHConfigFromDNS(serverName string, opt DoHClientOptions) (*HTTPSrr, error) {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(serverName), dns.TypeHTTPS)
 
 	var resp *dns.Msg
 	var resolvErr error
 	if opt.ECHresolver != "" {
-		resp, resolvErr = opt.Rs[opt.ECHresolver].Resolve(msg, ClientInfo{})
+		resp, resolvErr = opt.ResolverList[opt.ECHresolver].Resolve(msg, ClientInfo{})
 	} else {
 		ECHresolver, err := NewDoHClient("echTemp", "https://1.1.1.1/dns-query{?dns}", DoHClientOptions{})
 		if err != nil {
-			return nil, "", fmt.Errorf("could not instantiate DoH resolvers for ECH config fetch, last error: %v", err)
+			return nil, fmt.Errorf("could not instantiate DoH resolvers for ECH config fetch, last error: %v", err)
 		}
 		resp, resolvErr = ECHresolver.Resolve(msg, ClientInfo{})
 	}
 
 	if resolvErr != nil {
-		return nil, "", fmt.Errorf("ech DNS resolvers failed, last error: %v", resolvErr)
+		return nil, fmt.Errorf("ech DNS resolvers failed, last error: %v", resolvErr)
 	}
 	if resp.Rcode != dns.RcodeSuccess {
-		return nil, "", fmt.Errorf("DNS query returned error code: %d", resp.Rcode)
+		return nil, fmt.Errorf("DNS query returned error code: %d", resp.Rcode)
 	}
 
 	for _, ans := range resp.Answer {
 		if https, ok := ans.(*dns.HTTPS); ok {
-			echConfig, err := parseHTTPSForECH(https)
-			if err == nil {
-				return echConfig, https.Target, nil
+			rr, err := parseHTTPSForECH(https)
+			if err == nil && rr != nil {
+				return rr, nil
 			}
 		}
 	}
 
-	return nil, "", errors.New("no ECH configuration found in DNS records")
+	return nil, errors.New("no ECH configuration found in DNS records")
 }
 
-func parseHTTPSForECH(https *dns.HTTPS) ([]byte, error) {
+func parseHTTPSForECH(https *dns.HTTPS) (*HTTPSrr, error) {
+	var rr = new(HTTPSrr)
+
 	for _, kv := range https.Value {
 		if kv.Key() == dns.SVCB_ECHCONFIG {
-			echConfig, err := base64.StdEncoding.DecodeString(kv.String())
+			conf, err := base64.StdEncoding.DecodeString(kv.String())
 			if err != nil {
 				return nil, fmt.Errorf("failed to decode ECH config: %v", err)
 			}
-			return echConfig, nil
+			rr.echConfig = conf
+			break
 		}
 	}
-	return nil, errors.New("no ECH parameter found in HTTPS record")
+
+	for _, kv := range https.Value {
+		if kv.Key() == dns.SVCB_IPV6HINT {
+			rr.ipv6hint = kv.String()
+		} else if kv.Key() == dns.SVCB_IPV4HINT {
+			rr.ipv4hint = kv.String()
+		}
+	}
+	rr.target = https.Target
+	return rr, nil
 }
