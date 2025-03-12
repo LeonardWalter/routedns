@@ -99,9 +99,6 @@ func NewDoHClient(id, endpoint string, opt DoHClientOptions) (*DoHClient, error)
 	if opt.Method == "" {
 		opt.Method = "POST"
 	}
-	if opt.Use0RTT && opt.Transport == "quic" {
-		opt.Method = "GET"
-	}
 	if opt.Method != "POST" && opt.Method != "GET" {
 		return nil, fmt.Errorf("unsupported method '%s'", opt.Method)
 	}
