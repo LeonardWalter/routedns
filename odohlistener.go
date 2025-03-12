@@ -152,6 +152,10 @@ func (s *ODoHListener) ODoHproxyHandler(w http.ResponseWriter, r *http.Request) 
 			Transport: s.opt.Transport,
 			TLSConfig: tlsConfig,
 		}
+		if EXPERIMENTAL_0RTT {
+			opt.Use0RTT = true
+		}
+
 		client, err = s.dohClientP.AddClient(host, path, opt)
 		if err != nil {
 			Log.Warn("Adding new client failed")

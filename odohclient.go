@@ -23,6 +23,8 @@ const (
 	ODOH_CONTENT_TYPE = "application/oblivious-dns-message"
 )
 
+const EXPERIMENTAL_0RTT = false
+
 // ODoHClient is a Oblivious DNS client.
 type ODoHClient struct {
 	id         string
@@ -43,6 +45,10 @@ func NewODoHClient(id, proxy, target, targetConfig string, opt DoHClientOptions)
 	if proxy == "" {
 		Log.Warn("Attention! no ODoH proxy defined, using the target as proxy")
 		proxy = target
+	}
+
+	if EXPERIMENTAL_0RTT {
+		opt.Use0RTT = true
 	}
 
 	dohProxy, err := NewDoHClient(id, proxy, opt)
