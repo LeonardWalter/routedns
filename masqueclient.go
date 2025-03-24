@@ -82,6 +82,7 @@ func SetupMasque(proxyURITemplate *uritemplate.Template, url string) *http.Clien
 				pconn, _, err := cl.Dial(context.Background(), proxyURITemplate, raddr)
 				if err != nil {
 					Log.Error("dialing MASQUE proxy failed:", "error", err)
+					return nil, err
 				}
 				Log.Debug(fmt.Sprintf("dialed connection: %s <-> %s", pconn.LocalAddr(), raddr))
 				ec, err := quic.DialEarly(ctx, pconn, raddr, tlsConf, &quic.Config{DisablePathMTUDiscovery: true})
@@ -105,7 +106,6 @@ func extractHostPort(target string) (string, error) {
 	if _, _, err := net.SplitHostPort(host); err != nil {
 		host = net.JoinHostPort(u.Hostname(), "443")
 	}
-	Log.Debug("old: " + target + " new: " + host)
 	return host, nil
 }
 
@@ -129,9 +129,18 @@ func (d *MASQUEClient) Resolve(q *dns.Msg, ci ClientInfo) (*dns.Msg, error) {
 		return nil, err
 	}
 
-	rsp, err := d.client.Do(req)
-	if err != nil {
-		return nil, err
+	var rsp *http.Response
+	for range 2 {
+		rsp, err = d.client.Do(req)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				Log.Error("connection timeout, try restarting the connection")
+				d.client = SetupMasque(d.template, d.target)
+				continue
+			}
+			return nil, err
+		}
+		break
 	}
 	defer rsp.Body.Close()
 
@@ -152,7 +161,7 @@ func (d *MASQUEClient) buildRequest(msg []byte, ctx context.Context) (*http.Requ
 	}
 
 	// The URL must be a template. Process it with the "dns" param containing the encoded query.
-	u, err := template.Expand(map[string]interface{}{"dns": b64})
+	u, err := template.Expand(map[string]any{"dns": b64})
 	if err != nil {
 		return nil, err
 	}
