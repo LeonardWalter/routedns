@@ -64,7 +64,7 @@ func SetupMasque(proxyURITemplate *uritemplate.Template, url string) *http.Clien
 	cl := masque.Client{
 		QUICConfig: &quic.Config{
 			EnableDatagrams:   true,
-			InitialPacketSize: 1320,
+			InitialPacketSize: 1400,
 		},
 	}
 	host, err := extractHostPort(url)

@@ -52,7 +52,7 @@ func (d *MDoQClient) masqueDial(url string) (quic.EarlyConnection, error) {
 	cl := masque.Client{
 		QUICConfig: &quic.Config{
 			EnableDatagrams:   true,
-			InitialPacketSize: 1320,
+			InitialPacketSize: 1400,
 		},
 	}
 
