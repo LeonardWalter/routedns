@@ -21,7 +21,6 @@ type MDoQClient struct {
 	template *uritemplate.Template
 
 	client *DoQClient
-	net.PacketConn
 	quic.EarlyConnection
 }
 
@@ -49,7 +48,7 @@ func NewMDoQClient(id, proxy string, endpoint string, opt DoQClientOptions) (*MD
 	}, nil
 }
 
-func initMasque(template *uritemplate.Template, url string) (net.PacketConn, error) {
+func (d *MDoQClient) masqueDial(url string) (quic.EarlyConnection, error) {
 	cl := masque.Client{
 		QUICConfig: &quic.Config{
 			EnableDatagrams:   true,
@@ -57,24 +56,21 @@ func initMasque(template *uritemplate.Template, url string) (net.PacketConn, err
 		},
 	}
 
-	pconn, _, err := cl.DialAddr(context.Background(), template, url)
+	pconn, _, err := cl.DialAddr(context.Background(), d.template, url)
 	if err != nil {
 		Log.Error("failed to dial masque proxy:", "error", err)
 		return nil, err
 	}
-	return pconn, err
-}
 
-func (d *MDoQClient) masqueDial(endpoint string) (quic.EarlyConnection, error) {
-	host, _, err := net.SplitHostPort(endpoint)
+	host, _, err := net.SplitHostPort(d.target)
 	if err != nil {
 		Log.Error("failed to parse target address:", "error", err)
 		return nil, err
 	}
 
-	udpAddr, err := net.ResolveUDPAddr("udp", endpoint)
+	udpAddr, err := net.ResolveUDPAddr("udp", d.target)
 	if err != nil {
-		Log.Debug("couldn't resolve remote addr (" + endpoint + ") for UDP quic client")
+		Log.Debug("couldn't resolve remote addr (" + d.target + ") for UDP quic client")
 		return nil, err
 	}
 
@@ -82,11 +78,10 @@ func (d *MDoQClient) masqueDial(endpoint string) (quic.EarlyConnection, error) {
 		NextProtos: []string{"doq"},
 		ServerName: host,
 	}
-	// use DialEarly so that we attempt to use 0-RTT DNS queries, it's lower latency (if the server supports it)
-	earlyConn, err := quic.DialEarly(context.Background(), d.PacketConn, udpAddr, tlsConfig, &quic.Config{DisablePathMTUDiscovery: true})
+
+	earlyConn, err := quic.DialEarly(context.Background(), pconn, udpAddr, tlsConfig, &quic.Config{DisablePathMTUDiscovery: true})
 	if err != nil {
-		// don't leak filehandles / sockets; if we got here udpConn must exist
-		_ = d.PacketConn.Close()
+		_ = pconn.Close()
 		Log.Debug("couldn't dial quic early connection")
 		return nil, err
 	}
@@ -94,34 +89,14 @@ func (d *MDoQClient) masqueDial(endpoint string) (quic.EarlyConnection, error) {
 	return earlyConn, err
 }
 
-func (d *MDoQClient) getMasqueStream() (quic.Stream, error) {
-	stream, err := d.EarlyConnection.OpenStream()
-	if err != nil {
-		Log.Debug("temporary fail when trying to open stream, attempting new connection")
-	}
-	Log.Debug("got new stream")
-	return stream, err
-}
-
 // Resolve a DNS query.
 func (d *MDoQClient) Resolve(q *dns.Msg, ci ClientInfo) (*dns.Msg, error) {
-	if d.PacketConn == nil {
-		conn, err := initMasque(d.template, d.target)
-		if err != nil {
-			Log.Error("failed to connect to masque proxy:", "error", err)
-			return nil, err
-		}
-		d.PacketConn = conn
-	}
-	Log.Debug("have masque packetConn")
-
 	if d.EarlyConnection == nil {
 		conn, err := d.masqueDial(d.target)
 		if err != nil {
 			Log.Error("failed to dial target via masque proxy:", "error", err)
 			return nil, err
 		}
-		Log.Debug("got new Early Conn")
 		d.EarlyConnection = conn
 	}
 
@@ -142,9 +117,22 @@ func (d *MDoQClient) Resolve(q *dns.Msg, ci ClientInfo) (*dns.Msg, error) {
 	copy(b[2:], p)
 
 	// Get a new stream in the connection
-	stream, err := d.getMasqueStream()
-	if err != nil {
-		return nil, err
+	var stream quic.Stream
+	for range 2 {
+		stream, err = d.EarlyConnection.OpenStream()
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				conn, err := d.masqueDial(d.target)
+				if err != nil {
+					Log.Error("failed to dial target via masque proxy:", "error", err)
+					return nil, err
+				}
+				d.EarlyConnection = conn
+				continue
+			}
+			return nil, err
+		}
+		break
 	}
 
 	// Write the query into the stream and close it. Only one stream per query/response
