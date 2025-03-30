@@ -13,7 +13,7 @@ require (
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/pion/dtls/v2 v2.2.12
 	github.com/pkg/errors v0.9.1
-	github.com/quic-go/quic-go v0.50.0
+	github.com/quic-go/quic-go v0.50.1-0.20250330131739-3fd4f95a3b89
 	github.com/redis/go-redis/v9 v9.7.1
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.9.0
